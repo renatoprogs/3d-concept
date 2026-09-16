@@ -2,3 +2,9 @@
 target
 node_modules
 test-ledger
+
+# Chaves e binarios que nunca devem ir para o repositorio
+program-keypair.json
+*.so
+files.zip
+*.zip
