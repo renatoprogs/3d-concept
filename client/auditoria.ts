@@ -1,14 +1,7 @@
-import * as web3 from "@solana/web3.js";
-import { Connection, PublicKey } from "@solana/web3.js";// Manually initialize variables that are automatically defined in Playground
-const PROGRAM_ID = new web3.PublicKey("4qrMcQxZGoVKqWxA3cvKP8Cin76Zo95KQtChGVMJhdgy");
-const connection = new web3.Connection("https://api.devnet.solana.com", "confirmed");
-const wallet = { keypair: web3.Keypair.generate() };
-
-
+import { connection, payer } from "./config";
 
 async function auditarDevnetSemTimers() {
-  const connection: Connection = connection;
-  const walletPubkey: PublicKey = wallet.keypair.publicKey;
+  const walletPubkey = payer.publicKey;
 
   console.log("🔍 [AUDITORIA DEVNET] Consultando historico on-chain...");
   console.log(`📍 Carteira: ${walletPubkey.toBase58()}`);
@@ -17,7 +10,7 @@ async function auditarDevnetSemTimers() {
   const saldoLamports = await connection.getBalance(walletPubkey);
   const saldoSOL = saldoLamports / 1e9;
 
-  // 2. Busca apenas as últimas 5 assinaturas para não estourar o limite de RPC
+  // 2. Busca apenas as ultimas 5 assinaturas para nao estourar o limite de RPC
   const assinaturas = await connection.getSignaturesForAddress(walletPubkey, { limit: 5 });
 
   let totalGasSOL = 0;
@@ -36,7 +29,6 @@ async function auditarDevnetSemTimers() {
     }
 
     try {
-      // Leitura de metadados via Web3.js nativo
       const tx = await connection.getParsedTransaction(sig.signature, {
         maxSupportedTransactionVersion: 0,
       });
@@ -44,12 +36,14 @@ async function auditarDevnetSemTimers() {
       if (tx && tx.meta) {
         const feeSOL = tx.meta.fee / 1e9;
         totalGasSOL += feeSOL;
-        console.log(`  Tx [${i + 1}]: ${sig.signature.slice(0, 16)}... | Taxa: ${feeSOL.toFixed(6)} SOL | Status: OK`);
+        console.log(
+          `  Tx [${i + 1}]: ${sig.signature.slice(0, 16)}... | Taxa: ${feeSOL.toFixed(6)} SOL | Status: OK`
+        );
       }
     } catch (err) {
-      // Caso o RPC imponha limite, assume a taxa padrão da rede de 5.000 lamports
+      // Caso o RPC imponha limite, assume a taxa padrao da rede de 5.000 lamports
       totalGasSOL += 0.000005;
-      console.log(`  Tx [${i + 1}]: ${sig.signature.slice(0, 16)}... | Taxa Padrão: 0.000005 SOL`);
+      console.log(`  Tx [${i + 1}]: ${sig.signature.slice(0, 16)}... | Taxa Padrao: 0.000005 SOL`);
     }
   }
 

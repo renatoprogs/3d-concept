@@ -1,21 +1,5 @@
-import * as web3 from "@solana/web3.js";
-// Manually initialize variables that are automatically defined in Playground
-const PROGRAM_ID = new web3.PublicKey("4qrMcQxZGoVKqWxA3cvKP8Cin76Zo95KQtChGVMJhdgy");
-const connection = new web3.Connection("https://api.devnet.solana.com", "confirmed");
-const wallet = { keypair: web3.Keypair.generate() };
-
-import {
-  Connection,
-  Transaction,
-  TransactionInstruction,
-  PublicKey,
-  SystemProgram,
-  sendAndConfirmTransaction,
-} from "@solana/web3.js";
-
-const connection = connection;
-const payer = wallet.keypair;
-const PROGRAM_ID_3D = PROGRAM_ID;
+import { Transaction, TransactionInstruction, PublicKey, sendAndConfirmTransaction } from "@solana/web3.js";
+import { connection, payer, PROGRAM_ID } from "./config";
 
 const POOL_3D_ACCOUNT = new PublicKey("HJwjqhGj6L1qP8BTxeicwYTQTQzxjrz51SgynuhLPFwn");
 
@@ -32,13 +16,13 @@ async function executarArbitragem(volumeApostado: number) {
   tx.add(
     new TransactionInstruction({
       keys: [{ pubkey: POOL_3D_ACCOUNT, isSigner: false, isWritable: true }],
-      programId: PROGRAM_ID_3D,
+      programId: PROGRAM_ID,
       data: Buffer.from(buffer3D),
     })
   );
 
   console.log("[BOT ARBITRAGEM] Disparando transação atômica na Devnet...");
-  
+
   try {
     const txHash = await sendAndConfirmTransaction(connection, tx, [payer]);
     console.log("[BOT ARBITRAGEM] Arbitragem concluída com sucesso! Hash:", txHash);
