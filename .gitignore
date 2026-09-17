@@ -1,10 +1,57 @@
-.DS_Store
-target
-node_modules
-test-ledger
+```
+# Dependencies
+target/
 
-# Chaves e binarios que nunca devem ir para o repositorio
-program-keypair.json
-*.so
-files.zip
-*.zip
+# Compiled and build artifacts
+**/*.rs.bk
+**/*.rlib
+**/*.so
+**/*.dylib
+**/*.dll
+**/*.dSYM/
+**/*.pdb
+**/*.obj
+**/*.o
+**/*.a
+**/*.lib
+**/deps/
+**/examples/
+**/incremental/
+
+# Logs and temp files
+*.log
+*.tmp
+*.swp
+*.swo
+
+# Editors
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Environment
+.env
+.env.local
+.env.*
+
+# Coverage
+coverage/
+htmlcov/
+.coverage
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Cache directories
+**/__pycache__/
+**/.pytest_cache/
+**/.mypy_cache/
+**/.ruff_cache/
+**/node_modules/
+**/.venv/
+**/venv/
+**/.direnv/
+**/.envrc
+```
