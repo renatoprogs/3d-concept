@@ -2,56 +2,6 @@
 # Dependencies
 target/
 
-# Compiled and build artifacts
+# Compiled files
 **/*.rs.bk
-**/*.rlib
-**/*.so
-**/*.dylib
-**/*.dll
-**/*.dSYM/
-**/*.pdb
-**/*.obj
-**/*.o
-**/*.a
-**/*.lib
-**/deps/
-**/examples/
-**/incremental/
-
-# Logs and temp files
-*.log
-*.tmp
-*.swp
-*.swo
-
-# Editors
-.vscode/
-.idea/
-*.swp
-*.swo
-
-# Environment
-.env
-.env.local
-.env.*
-
-# Coverage
-coverage/
-htmlcov/
-.coverage
-
-# OS
-.DS_Store
-Thumbs.db
-
-# Cache directories
-**/__pycache__/
-**/.pytest_cache/
-**/.mypy_cache/
-**/.ruff_cache/
-**/node_modules/
-**/.venv/
-**/venv/
-**/.direnv/
-**/.envrc
 ```
