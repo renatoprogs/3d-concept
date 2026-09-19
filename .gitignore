@@ -1,7 +1,46 @@
 ```
 # Dependencies
-target/
+node_modules/
 
-# Compiled files
-**/*.rs.bk
+# Environment
+.env
+.env.local
+*.env.*
+
+# Logs and temp files
+*.log
+*.tmp
+
+# Editors
+.vscode/
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+env/
+venv/
+.venv/
+pip-log.txt
+pip-delete-this-directory.txt
+.tox/
+.coverage
+.coverage.*
+.cache
+nosetests.xml
+coverage.xml
+*.cover
+*.log
+.git/refs/original/
+**/.pytest_cache/
+**/.mypy_cache/
+**/.DS_Store
+**/Thumbs.db
+
+# Build artifacts
+dist/
+build/
+*.egg-info/
 ```
