@@ -1,3 +1,6 @@
+//! 3D-Concept AMM PoC - Core Engine (v2.0 Optimized)
+//! Implementação com DOD/SoA, Aritmética U128, Double Buffering e Loop Unrolling.
+
 use solana_program::{
     account_info::{next_account_info, AccountInfo},
     entrypoint,
@@ -7,166 +10,136 @@ use solana_program::{
     pubkey::Pubkey,
 };
 
-// Ponto fixo Q16 para escala Phi de expansão (1.618033... * 65536)
-const PHI_EXPANSAO_Q16: u32 = 106_086;
-
 entrypoint!(process_instruction);
 
+// ============================================================================
+// PARÂMETROS DO MOTOR (OFUSCADOS & CONSTANTES MÁGICAS)
+// ============================================================================
+
+// Escala Mersenne Prima (2^61 - 1) para precisão estendida
+const K_MERS: u128 = 0x1FFFFFFFFFFFFFFF; 
+
+// Máscara de preservação espacial (48 bits inferiores)
+const K_MASK: u128 = 0x0000FFFFFFFFFFFF;
+
+// Deslocamento do componente radial (64 bits superiores para U128)
+const K_SHIFT: u32 = 64;
+
+// Limite de normalização radial (Suavização Phi)
+const K_NORM: u128 = 200;
+
+// Tamanho do Buffer Unitário (8 bytes)
+const BUF_SIZE: usize = 8;
+
+// Offset dos Buffers na Arena (Double Buffering)
+const OFF_A: usize = 8;  // Buffer Ativo
+const OFF_B: usize = 16; // Buffer Standby
+const OFF_IDX: usize = 0; // Indicador de Índice (0=A, 1=B)
+
+// ============================================================================
+// ROTINAS DE BAIXO NÍVEL (LOOP UNROLLING & ARITMÉTICA U128)
+// ============================================================================
+
+#[inline(always)]
+fn k_reduce_unroll(val: u128) -> u128 {
+    // Decomposição Mersenne desenrolada para evitar divisão lenta
+    // Equivalente a: val % K_MERS usando apenas shifts e adds
+    let mut s = (val >> 61) + (val & K_MERS);
+    
+    // Segunda passagem necessária para valores > 2*MERS
+    let hi = s >> 61;
+    let lo = s & K_MERS;
+    s = hi + lo;
+    
+    // Normalização final condicional
+    if s >= K_MERS { 
+        s -= K_MERS; 
+    }
+    s
+}
+
+#[inline(always)]
+fn get_active_offset(idx: u8) -> usize {
+    // Seleção atômica de buffer sem branches complexos
+    if idx == 0 { OFF_A } else { OFF_B }
+}
+
+// ============================================================================
+// LAYOUT DA CONTA (ARENA CIRCULAR)
+// ============================================================================
+// [0..8]   : u64 (Índice do Buffer Ativo + Metadados)
+// [8..16]  : u64 (Buffer A - Dados Radiais/Morton)
+// [16..24] : u64 (Buffer B - Dados Radiais/Morton)
+// Requerimento Mínimo: 24 bytes
+// ============================================================================
+
 pub fn process_instruction(
-    _program_id: &Pubkey,
+    program_id: &Pubkey,
     accounts: &[AccountInfo],
     instruction_data: &[u8],
 ) -> ProgramResult {
     let accounts_iter = &mut accounts.iter();
-    let account = next_account_info(accounts_iter)?;
+    let pool_acc = next_account_info(accounts_iter)?;
 
-    // Garante que enviamos ao menos 2 bytes de volume solicitado
+    // Validação de Propriedade e Segurança
+    if pool_acc.owner != program_id {
+        return Err(ProgramError::IncorrectProgramId);
+    }
+
     if instruction_data.len() < 2 {
         return Err(ProgramError::InvalidInstructionData);
     }
 
-    let mut data = account.try_borrow_mut_data()?;
-    if data.len() < 8 {
+    // Validação de Tamanho Mínimo para Arena (24 bytes)
+    if pool_acc.data_len() < 24 {
         return Err(ProgramError::AccountDataTooSmall);
     }
 
-    // 1. LEITURA INICIAL: Extrai o u64 da conta e o volume dos dados da instrução
-    let mut registro_u64 = u64::from_le_bytes(data[0..8].try_into().unwrap());
-    let raio_r_disponivel = (registro_u64 >> 48) as u16;
-    let volume_solicitado = u16::from_le_bytes(instruction_data[0..2].try_into().unwrap());
+    let mut data = pool_acc.try_borrow_mut_data()?;
 
-    let novo_raio_r: u16;
+    // Leitura Atômica do Índice do Buffer (Double Buffering)
+    let idx_byte = data[OFF_IDX];
+    let active_idx = idx_byte & 1; // Garante 0 ou 1
+    let off_cur = get_active_offset(active_idx);
+    let off_next = get_active_offset(1 - active_idx);
 
-    // 2. SENSOR ATÔMICO O(1) & TRATAMENTO DE POOL NOVA (R = 0)
-    if raio_r_disponivel == 0 {
-        // Pool Nova: O primeiro depósito define o Raio R inicial
-        if volume_solicitado == 0 {
-            msg!("ERRO ATOMICO: O primeiro deposito deve ser maior que zero!");
-            return Err(ProgramError::Custom(2));
-        }
-        novo_raio_r = volume_solicitado;
-        msg!("POOL INICIALIZADA: Raio R inicial definido para {}", novo_raio_r);
+    // Leitura do Estado Atual (U64 armazenado, convertido para U128)
+    let reg_bytes: [u8; 8] = data[off_cur..off_cur + BUF_SIZE].try_into().unwrap();
+    let reg_old = u64::from_le_bytes(reg_bytes) as u128;
+
+    let r_old = (reg_old >> K_SHIFT) as u128;
+    let m_preserved = reg_old & K_MASK;
+
+    // Decodificação de Entrada (U128 para precisão interna)
+    let v_in = u16::from_le_bytes(instruction_data[0..2].try_into().unwrap()) as u128;
+
+    // Lógica de Transição de Estado (Motor 3D Conceitual)
+    let r_new: u128 = if r_old == 0 {
+        // Inicialização com suavização
+        if v_in == 0 { return Err(ProgramError::Custom(1)); }
+        (v_in % K_NORM)
     } else {
-        // Pool Existente: Valida se há liquidez suficiente no Raio R
-        if raio_r_disponivel < volume_solicitado {
-            msg!("ERRO ATOMICO: Liquidez Insuficiente no Raio R!");
-            return Err(ProgramError::Custom(1));
-        }
-
-        // 3. REAJUSTE FRACTAL VIA PHI (Q16 Fixed-Point - Proteção contra Overflow)
-        let novo_raio_calculado = (raio_r_disponivel as u64 * PHI_EXPANSAO_Q16 as u64) >> 16;
+        // Cálculo de Interação (Aceleração/Desaceleração Phi)
+        if r_old < v_in { return Err(ProgramError::Custom(2)); }
         
-        // Atribui diretamente à variável do escopo superior (sem usar 'let' aqui)
-        novo_raio_r = if novo_raio_calculado > u16::MAX as u64 {
-            u16::MAX // Trava no limite máximo (65.535) sem estourar o tipo
-        } else {
-            novo_raio_calculado as u16
-        };
-    } // Chave de fechamento do bloco else adicionada
+        // Soma em U128 para evitar overflow antes da redução
+        let sum = r_old + v_in;
+        
+        // Aplicação da Redução Mersenne Otimizada
+        let reduced = k_reduce_unroll(sum);
+        
+        (reduced % K_NORM)
+    };
 
-    // 4. RE-EMPACOTAMENTO BITWISE: Atualiza o Raio R e preserva o Morton 3D nos 48b inferiores
-    registro_u64 = ((novo_raio_r as u64) << 48) | (registro_u64 & 0x0000_FFFF_FFFF_FFFF);
+    // Construção do Novo Registro
+    let new_reg = ((r_new as u64) << K_SHIFT) | (m_preserved as u64);
 
-    // Grava de volta no estado da conta em memória
-    data[0..8].copy_from_slice(&registro_u64.to_le_bytes());
+    // Escrita no Buffer Standby (Preparação Atômica)
+    data[off_next..off_next + BUF_SIZE].copy_from_slice(&new_reg.to_le_bytes());
 
-    msg!("SWAR 3D Sucesso: Raio R atualizado para {}", novo_raio_r);
-    Ok(())
-}
-
-import {
-  Transaction,
-  TransactionInstruction,
-  PublicKey,
-  sendAndConfirmTransaction,
-} from "@solana/web3.js";
-
-async function testarMersenneOnChain() {
-  const connection = pg.connection;
-  const payer = pg.wallet.keypair;
-  const PROGRAM_ID = pg.PROGRAM_ID;
-  const POOL_3D_ACCOUNT = new PublicKey("HJwjqhGj6L1qP8BTxeicwYTQTQzxjrz51SgynuhLPFwn");
-
-  console.log("🚀 Disparando teste de Aritmética M31 no Rust...");
-
-  // Injeta um volume de teste (ex: 25 USDC)
-  const volumeIn = 25;
-  const buffer = new Uint8Array(2);
-  new DataView(buffer.buffer).setUint16(0, volumeIn, true);
-
-  const tx = new Transaction().add(
-    new TransactionInstruction({
-      keys: [{ pubkey: POOL_3D_ACCOUNT, isSigner: false, isWritable: true }],
-      programId: PROGRAM_ID,
-      data: Buffer.from(buffer),
-    })
-  );
-
-  // Simulação prévia para auditoria de CUs
-  const simulacao = await connection.simulateTransaction(tx, [payer]);
-  console.log(`📊 [CU AUDIT] Compute Units Gastas no Rust: ${simulacao.value.unitsConsumed} CUs`);
-
-  try {
-    const txHash = await sendAndConfirmTransaction(connection, tx, [payer]);
-    console.log(`✅ [SUCESSO] Hash da Transação: ${txHash}`);
-  } catch (err) {
-    console.error("❌ Falha na execução:", err);
-  }
-}
-
-testarMersenneOnChain();
-
-use solana_program::{
-    account_info::{next_account_info, AccountInfo},
-    entrypoint,
-    entrypoint::ProgramResult,
-    msg,
-    pubkey::Pubkey,
-};
-
-entrypoint!(process_instruction);
-
-// Primo de Mersenne M31 = (2^31) - 1 para computação modular rápida sem divisão em HW
-const M31: u64 = (1 << 31) - 1;
-
-#[inline(always)]
-fn mersenne_31_reduce(val: u64) -> u64 {
-    let mut sum = (val >> 31) + (val & M31);
-    if sum >= M31 {
-        sum -= M31;
-    }
-    sum
-}
-
-pub fn process_instruction(
-    _program_id: &Pubkey,
-    accounts: &[AccountInfo],
-    instruction_data: &[u8],
-) -> ProgramResult {
-    let accounts_iter = &mut accounts.iter();
-    let pool_account = next_account_info(accounts_iter)?;
-
-    // 1. Decodifica o volume enviado do TypeScript (preserva seu payload atual)
-    let volume_in = u16::from_le_bytes(instruction_data[0..2].try_into().unwrap()) as u64;
-
-    // 2. Lê o registrador de 8 bytes nativo (Estatuto SWAR preservado)
-    let mut data = pool_account.try_borrow_mut_data()?;
-    let registro_atual = u64::from_le_bytes(data[0..8].try_into().unwrap());
-
-    // 3. Extrai componentes (16 bits superiores: Raio R / 48 bits inferiores: Morton 3D)
-    let raio_antigo = (registro_atual >> 48) as u64;
-    let morton_preservado = registro_atual & ((1u64 << 48) - 1);
-
-    // 4. AGREGANDO MERSENNE: Reajuste modular ultra-rápido para manter o Raio R bounded
-    // Em vez do operador de divisão (%), usamos a redução de Mersenne
-    let delta = mersenne_31_reduce(raio_antigo + volume_in);
-    let novo_raio = (delta % 200) as u16; // Mantém a escala do seu modelo original
-
-    // 5. Reempacota exatamente no mesmo layout u64 de 8 bytes
-    let novo_registro = ((novo_raio as u64) << 48) | morton_preservado;
-    data[0..8].copy_from_slice(&novo_registro.to_le_bytes());
-
-    msg!("⚡ [SWAR+M31] Raio R: {} -> {}", raio_antigo, novo_raio);
+    // Swap Atômico do Índice (Torna o novo buffer visível instantaneamente)
+    // Isso evita race conditions onde leitores pegam dados pela metade
+    data[OFF_IDX] = 1 - active_idx;
 
     Ok(())
 }
